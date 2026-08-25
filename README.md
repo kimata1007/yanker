@@ -30,6 +30,15 @@ empty clipboard and drops the one line you wanted to share.
 ## Install
 
 <details open>
+<summary><b>Homebrew</b></summary>
+
+```zsh
+brew install kimata1007/tap/yanker
+echo 'source "$(brew --prefix yanker)/share/yanker/yanker.plugin.zsh"' >> ~/.zshrc
+```
+</details>
+
+<details>
 <summary><b>sheldon</b></summary>
 
 ```toml

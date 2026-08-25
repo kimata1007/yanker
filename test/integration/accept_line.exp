@@ -1,0 +1,21 @@
+#!/usr/bin/env expect
+# 疑似端末で実際に Enter を押し、ZLE の行書き換えが効いているかを確かめる。
+# ここだけは端末が要るので、他のテストと違って expect を使う
+set timeout 15
+set root [lindex $argv 0]
+set home [lindex $argv 1]
+set line [lindex $argv 2]
+set term [lindex $argv 3]
+
+spawn env ZDOTDIR=$home HOME=$home SHELL_SESSIONS_DISABLE=1 TERM=$term zsh -i
+expect {
+  "READY> " {}
+  timeout { puts "TIMEOUT: プロンプトが出ない"; exit 1 }
+}
+send -- "$line\r"
+expect {
+  "READY> " {}
+  timeout { puts "TIMEOUT: コマンドが終わらない"; exit 1 }
+}
+send -- "exit\r"
+expect eof

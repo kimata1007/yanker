@@ -1,21 +1,44 @@
 #!/usr/bin/env expect
 # 疑似端末で実際に Enter を押し、ZLE の行書き換えが効いているかを確かめる。
-# ここだけは端末が要るので、他のテストと違って expect を使う
-set timeout 15
-set root [lindex $argv 0]
-set home [lindex $argv 1]
-set line [lindex $argv 2]
-set term [lindex $argv 3]
+#
+# zsh は -f を付けると /etc/zshrc も ~/.zshrc も読まない。設定はすべてこの中から
+# 打ち込むので、実行環境に何が入っていても結果が変わらない。
+# rc ファイルを置く方式にすると、環境側の設定や zsh-newuser-install に邪魔されて
+# プロンプトが出ないことがある。
+set timeout 20
+set plugin [lindex $argv 0]
+set clip   [lindex $argv 1]
+set line   [lindex $argv 2]
+set extra  [lindex $argv 3]
 
-spawn env ZDOTDIR=$home HOME=$home SHELL_SESSIONS_DISABLE=1 TERM=$term zsh -i
-expect {
-  "READY> " {}
-  timeout { puts "TIMEOUT: プロンプトが出ない"; exit 1 }
+proc await {what} {
+  expect {
+    "READY> " {}
+    timeout { puts "TIMEOUT: $what"; exit 1 }
+    eof     { puts "EOF: $what";     exit 1 }
+  }
 }
+
+spawn env TERM=vt100 zsh -f -i
+
+# プロンプトは2つに分けて組み立てる。PS1='READY> ' と直に書くと、
+# 端末に返ってくる入力のエコー自体が "READY> " を含み、プロンプトと区別できない
+send -- "p=READY; PS1=\"\${p}> \"\r"
+await "prompt"
+
+send -- "YANKER_CLIPBOARD='cat > $clip'\r"
+await "clipboard"
+
+if {$extra ne ""} {
+  send -- "$extra\r"
+  await "extra setup"
+}
+
+send -- "source $plugin\r"
+await "source"
+
 send -- "$line\r"
-expect {
-  "READY> " {}
-  timeout { puts "TIMEOUT: コマンドが終わらない"; exit 1 }
-}
+await "command"
+
 send -- "exit\r"
 expect eof

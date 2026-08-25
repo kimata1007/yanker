@@ -4,7 +4,7 @@
 #
 #   yanker pwd                          … 「$ pwd」と出力をコピー
 #   yanker -o pwd                       … 出力だけをコピー
-#   yanker kubectl get pods | grep foo  … パイプもクォートせず書ける
+#   yanker ls -l | grep '\.zsh$'       … パイプもクォートせず書ける
 #
 # zsh は行を読んだ時点でパイプに分解してから各区間を起動するため、関数の $@ には
 # 分解済みの1区間しか入らない。`yanker ls | grep foo` だと yanker に届くのは `ls` だけで、

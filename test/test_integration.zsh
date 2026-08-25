@@ -5,23 +5,22 @@ if (( ! ${+commands[expect]} )); then
   return 0
 fi
 
-# 行を1つ打ち込み、コピーされた内容を返す
+# 行を1つ打ち込み、コピーされた内容を返す。
+# 第2引数はプラグインを読み込む前に流す設定
 type_line() {
-  local line=$1
-  local term=${2:-vt100}
-  local home=$(mktemp -d)
+  local line=$1 extra=$2
+  local dir=$(mktemp -d)
   {
-    cat > $home/.zshrc <<ZRC
-unsetopt prompt_sp prompt_cr
-PS1='READY> '
-RPS1=''
-YANKER_CLIPBOARD="cat > ${(q)home}/clip.txt"
-source ${(q)YANKER_ROOT}/yanker.plugin.zsh
-ZRC
-    expect $YANKER_ROOT/test/integration/accept_line.exp "$YANKER_ROOT" "$home" "$line" "$term" >/dev/null 2>&1
-    cat $home/clip.txt 2>/dev/null
+    expect $YANKER_ROOT/test/integration/accept_line.exp \
+      "$YANKER_ROOT/yanker.plugin.zsh" "$dir/clip.txt" "$line" "$extra" > $dir/log 2>&1
+    # 落ちたときに原因を追えるよう、端末とのやり取りをそのまま出す
+    if [[ ! -s $dir/clip.txt ]]; then
+      print -ru2 -- '       --- expect の記録 ---'
+      sed 's/^/       /' $dir/log >&2
+    fi
+    cat $dir/clip.txt 2>/dev/null
   } always {
-    rm -rf $home
+    rm -rf $dir
   }
 }
 
@@ -34,11 +33,11 @@ assert_equal '短縮名 y でも同じ経路を通る' \
   "$(type_line 'y echo hello | tr a-z A-Z')"
 
 assert_equal '標準エラー出力へ出るメッセージもコピーされる' \
-  $'$ print -ru2 -- no-resources\nno-resources' \
-  "$(type_line "yanker 'print -ru2 -- no-resources'")"
+  $'$ print -ru2 -- no-such-file\nno-such-file' \
+  "$(type_line "yanker 'print -ru2 -- no-such-file'")"
 
-# TERM=dumb では zsh が zsh/zle を読み込まないため、ウィジェットを張れない。
-# その場合でも関数として動き、パイプの自動クォートだけを諦めることを確かめる
-assert_equal 'ZLE が使えない端末では関数として動く' \
+# ZLE 連携を切った状態。端末の種類に頼らず、設定で確実に同じ経路へ入れる。
+# TERM=dumb での判定は macOS と Linux で結果が違うため使わない
+assert_equal 'ZLE 連携が無効なら関数として動く' \
   $'$ echo hello\nhello' \
-  "$(type_line 'yanker echo hello | tr a-z A-Z' dumb)"
+  "$(type_line 'yanker echo hello | tr a-z A-Z' 'YANKER_BIND_ACCEPT_LINE=0')"

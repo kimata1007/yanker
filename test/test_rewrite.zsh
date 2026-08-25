@@ -14,6 +14,10 @@ assert_equal '短縮名でも書き換える' "y 'ls | grep foo'" "$REPLY"
 rewrite 'yanker -o ls | grep foo'
 assert_equal '-o はコマンド名の側に残す' "yanker -o 'ls | grep foo'" "$REPLY"
 
+rewrite 'yanker find . -type f -name "*.zsh" | sort | head -5'
+assert_equal '長いコマンドでも境界を誤らない' \
+  "yanker 'find . -type f -name \"*.zsh\" | sort | head -5'" "$REPLY"
+
 rewrite 'yanker ls'
 assert_equal 'パイプが無ければ触らない' 'yanker ls' "$REPLY"
 

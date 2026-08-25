@@ -13,8 +13,8 @@ assert_equal '展開されうる文字はクォートで守る' "echo '\$HOME'" 
 _yanker_build_cmdline ls '|' grep foo
 assert_equal '演算子はクォートせず残す' 'ls | grep foo' "$REPLY"
 
-_yanker_build_cmdline kubectl get pods '2>&1'
-assert_equal 'リダイレクトも演算子として扱う' 'kubectl get pods 2>&1' "$REPLY"
+_yanker_build_cmdline make build '2>&1'
+assert_equal 'リダイレクトも演算子として扱う' 'make build 2>&1' "$REPLY"
 
 _yanker_build_cmdline 'ls | grep foo'
 assert_equal '単一引数はシェルの文としてそのまま扱う' 'ls | grep foo' "$REPLY"

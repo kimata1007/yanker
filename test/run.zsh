@@ -1,7 +1,9 @@
 #!/usr/bin/env zsh
-# テストランナー。test/test_*.zsh をすべて実行し、1つでも落ちたら 1 を返す。
-# err_return は使わない。失敗した assert でそこから先が走らなくなり、
-# 何件落ちたのかが分からなくなるため、件数を数えて最後に判定する
+# Test runner. Runs every test/test_*.zsh and exits 1 if any assertion failed.
+#
+# err_return is deliberately not set: a failing assertion would abort the rest
+# of the run and hide how many tests actually broke. Count them and decide at
+# the end instead.
 emulate -L zsh
 
 typeset -g TEST_DIR=${0:A:h}
@@ -9,7 +11,7 @@ source $TEST_DIR/helper.zsh
 
 typeset -a files=($TEST_DIR/test_*.zsh(N))
 if (( ! $#files )); then
-  print -ru2 -- 'テストファイルが見つかりません'
+  print -ru2 -- 'no test files found'
   exit 1
 fi
 
@@ -20,5 +22,5 @@ for f in $files; do
 done
 
 print -r -- ''
-print -r -- "合計 ${YANKER_TEST_RUN} 件 / 失敗 ${YANKER_TEST_FAILED} 件"
+print -r -- "${YANKER_TEST_RUN} tests, ${YANKER_TEST_FAILED} failed"
 (( YANKER_TEST_FAILED == 0 ))

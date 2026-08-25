@@ -1,10 +1,10 @@
 #!/usr/bin/env expect
-# 疑似端末で実際に Enter を押し、ZLE の行書き換えが効いているかを確かめる。
+# Press Enter on a real line over a pty and check that the ZLE rewrite fired.
 #
-# zsh は -f を付けると /etc/zshrc も ~/.zshrc も読まない。設定はすべてこの中から
-# 打ち込むので、実行環境に何が入っていても結果が変わらない。
-# rc ファイルを置く方式にすると、環境側の設定や zsh-newuser-install に邪魔されて
-# プロンプトが出ないことがある。
+# zsh with -f reads neither /etc/zshrc nor ~/.zshrc, so every setting is typed
+# in from here and the result does not depend on what the host has installed.
+# Writing an rc file instead lets host configuration, or zsh-newuser-install,
+# get in the way and the prompt may never appear.
 set timeout 20
 set plugin [lindex $argv 0]
 set clip   [lindex $argv 1]
@@ -21,8 +21,8 @@ proc await {what} {
 
 spawn env TERM=vt100 zsh -f -i
 
-# プロンプトは2つに分けて組み立てる。PS1='READY> ' と直に書くと、
-# 端末に返ってくる入力のエコー自体が "READY> " を含み、プロンプトと区別できない
+# Build the prompt in two steps. Written as PS1='READY> ' the echo of the typed
+# line would itself contain "READY> " and could not be told from the prompt.
 send -- "p=READY; PS1=\"\${p}> \"\r"
 await "prompt"
 

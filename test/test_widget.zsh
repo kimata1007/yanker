@@ -1,5 +1,6 @@
-# ZLE ウィジェットの割り込み。他プラグインとの共存と二重読み込みを検証する。
-# zle モジュールを明示的に読めば、端末が無くてもウィジェットの登録状態は調べられる
+# Hooking the ZLE widget: coexistence with other plugins, and double loading.
+# Loading the zle module explicitly makes the widget registry inspectable even
+# without a terminal.
 
 probe() {
   zsh -f -c "
@@ -11,24 +12,24 @@ probe() {
 
 typeset load="source ${(q)YANKER_ROOT}/yanker.plugin.zsh"
 
-assert_equal '他プラグインが居なければ組み込みへ橋渡しする' \
+assert_equal 'delegates to the builtin when no other plugin is present' \
   'accept-line=user:_yanker_accept_line parent=.accept-line alias=none' \
   "$(probe "$load")"
 
-assert_equal '既存の accept-line は別名で退避して呼び継ぐ' \
+assert_equal 'saves an existing accept-line and delegates to it' \
   'accept-line=user:_yanker_accept_line parent=_yanker_parent_accept_line alias=user:prior' \
   "$(probe "prior() { : }; zle -N accept-line prior; $load")"
 
-assert_equal '二重に読み込んでも自分自身を親にしない' \
+assert_equal 'a second load does not make yanker its own parent' \
   'accept-line=user:_yanker_accept_line parent=_yanker_parent_accept_line alias=user:prior' \
   "$(probe "prior() { : }; zle -N accept-line prior; $load; $load")"
 
-assert_equal 'YANKER_BIND_ACCEPT_LINE=0 なら accept-line に触らない' \
+assert_equal 'YANKER_BIND_ACCEPT_LINE=0 leaves accept-line untouched' \
   'accept-line=user:prior parent=.accept-line alias=none' \
   "$(probe "prior() { : }; zle -N accept-line prior; YANKER_BIND_ACCEPT_LINE=0; $load")"
 
-# ウィジェット本体が BUFFER を書き換えてから親を呼ぶこと。
-# 実行までは端末が要るので、ここでは呼び出しの流れだけを差し替えて確かめる
+# The widget must rewrite BUFFER before calling its parent. Actually running it
+# needs a terminal, so stub out `zle` and check the call sequence instead.
 typeset trace=$(zsh -f -c "
   zmodload zsh/zle
   $load
@@ -37,5 +38,5 @@ typeset trace=$(zsh -f -c "
   _yanker_accept_line
   print -r -- \"BUFFER=\$BUFFER\"
 " 2>&1)
-assert_equal 'BUFFER を書き換えてから親ウィジェットを呼ぶ' \
+assert_equal 'rewrites BUFFER before calling the parent widget' \
   $'zle:.accept-line\nBUFFER=yanker \'ls | grep foo\'' "$trace"

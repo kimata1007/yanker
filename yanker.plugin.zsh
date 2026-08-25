@@ -1,35 +1,37 @@
 #!/usr/bin/env zsh
 #
-# yanker — コマンド行とその出力を、まとめてクリップボードへコピーする
+# yanker — copy a command line and its output to the clipboard, together.
 #
-#   yanker pwd                          … 「$ pwd」と出力をコピー
-#   yanker -o pwd                       … 出力だけをコピー
-#   yanker ls -l | grep '\.zsh$'       … パイプもクォートせず書ける
+#   yanker pwd                     … copies "$ pwd" and the output
+#   yanker -o pwd                  … copies the output only
+#   yanker ls -l | grep '\.zsh$'   … pipes can be written unquoted
 #
-# zsh は行を読んだ時点でパイプに分解してから各区間を起動するため、関数の $@ には
-# 分解済みの1区間しか入らない。`yanker ls | grep foo` だと yanker に届くのは `ls` だけで、
-# 出力も tee とクリップボードが消費しきって後段の grep には何も渡らない。
-# そこで分解される前に行を書き換え、パイプごと yanker へ渡す。役割は4つに分かれている。
+# zsh splits a line into pipeline segments before running anything, so a plain
+# function only ever sees its own segment: in `yanker ls | grep foo`, yanker
+# receives just `ls`, and tee plus the clipboard consume the stream so `grep`
+# gets nothing. The fix is to rewrite the line before zsh splits it, handing the
+# whole pipeline to yanker as one argument. Four pieces do the work:
 #
-#   _yanker_clipboard_command  この環境で使えるクリップボードコマンドを選ぶ
-#   _yanker_build_cmdline      引数から eval できるコマンド行を組み立てる
-#   yanker                     コマンド行を eval し、画面とクリップボードへ流す
-#   _yanker_accept_line        Enter を押した行を書き換えてから実行に回す（ZLE）
+#   _yanker_clipboard_command  pick a clipboard command available on this host
+#   _yanker_build_cmdline      turn the arguments into an evaluatable command line
+#   yanker                     eval it, then stream the result to screen and clipboard
+#   _yanker_accept_line        rewrite the line the user pressed Enter on (ZLE)
 #
-# 設定できる変数:
-#   YANKER_CLIPBOARD         クリップボードへ書くコマンド。既定は環境から自動判定
-#   YANKER_ALIAS             短縮名。既定は y。空文字にすると作らない
-#   YANKER_BIND_ACCEPT_LINE  0 にすると ZLE 連携（パイプの自動クォート）を行わない
+# Configuration:
+#   YANKER_CLIPBOARD         command that reads the text on stdin (auto-detected)
+#   YANKER_ALIAS             short alias, `y` by default; empty string skips it
+#   YANKER_BIND_ACCEPT_LINE  set to 0 to leave `accept-line` untouched
 
-# 認識する呼び名。ZLE の行書き換えで先頭語を照合するのに使う
+# Names yanker answers to. The ZLE rewrite matches the first word against these.
 typeset -ga _yanker_names=(yanker)
 
 # ---------------------------------------------------------------------------
-# クリップボード
+# Clipboard
 # ---------------------------------------------------------------------------
 
-# この環境で使えるクリップボードコマンドを REPLY に入れる。無ければ 1 を返す。
-# 中身はパイプの最終段で eval するので、`ssh host pbcopy` のような式も書ける
+# Put a usable clipboard command in REPLY, or return 1 if there is none.
+# The value is eval'd as the last stage of a pipeline, so an expression such as
+# `ssh host pbcopy` works as well as a bare command name.
 _yanker_clipboard_command() {
   if [[ -n ${YANKER_CLIPBOARD-} ]]; then
     REPLY=$YANKER_CLIPBOARD
@@ -44,7 +46,7 @@ _yanker_clipboard_command() {
     'xsel --clipboard --input' \
     'clip.exe'
   do
-    # ${candidate%% *} は先頭語、すなわち実行ファイル名
+    # ${candidate%% *} is the first word, i.e. the executable name
     if (( ${+commands[${candidate%% *}]} )); then
       REPLY=$candidate
       return 0
@@ -56,28 +58,30 @@ _yanker_clipboard_command() {
 }
 
 # ---------------------------------------------------------------------------
-# コマンド行の組み立て
+# Building the command line
 # ---------------------------------------------------------------------------
 
-# パイプやリダイレクトの演算子か。コマンド行を組み立てるときクォートせず残す語であり、
-# 「素のパイプが書かれている」と判定する語でもあるので、1か所にまとめて持つ
+# Is this word a pipe or redirection operator? Such words are left unquoted when
+# assembling a command line, and they are also what marks a line as containing an
+# unquoted pipe, so both callers share this one list.
 _yanker_is_operator() {
   [[ $1 == ('|'|'|&'|'||'|'&&'|';'|'>'|'>>'|'<'|'2>'|'2>>'|'2>&1') ]]
 }
 
-# 引数から eval できるコマンド行を組み立て、REPLY に入れる
+# Build an evaluatable command line from the arguments and put it in REPLY.
 _yanker_build_cmdline() {
-  # 引数が1つなら、sh -c と同じくシェルの文として扱う。ZLE の書き換えが吐くのも
-  # この形なので、手で `yanker 'exit 3'` と書いたときと経路が揃う。
-  # 「演算子を含むときだけ文として扱う」という判定にすると、`exit 3` が
-  # コマンド名として扱われて command not found になり、挙動が読めなくなる
+  # A single argument is shell source, the same way `sh -c` treats it. The ZLE
+  # rewrite emits exactly this shape, so typing `yanker 'exit 3'` by hand takes
+  # the same path. Deciding by "only treat it as source when it contains an
+  # operator" would make `exit 3` a command name and fail with command not found,
+  # which is hard to predict from the outside.
   if (( $# == 1 )); then
     REPLY=$1
     return
   fi
 
-  # 語ごとに渡された場合。演算子はそのまま残し、それ以外はクォートして
-  # eval での再解釈から守る
+  # Word-by-word invocation: keep operators as operators and quote everything
+  # else so eval cannot reinterpret it.
   local word
   local -a parts=()
   for word in "$@"; do
@@ -91,11 +95,11 @@ _yanker_build_cmdline() {
 }
 
 # ---------------------------------------------------------------------------
-# 本体
+# Main entry point
 # ---------------------------------------------------------------------------
 
-# eval でユーザーのコマンドを走らせるので、ここでは emulate で options を変えない。
-# 変えるとその設定が eval の中身にも及んでしまう
+# This function eval's the user's command, so it deliberately does not call
+# `emulate` — any option change here would leak into the evaluated code.
 yanker() {
   local only_output=0
   if [[ $1 == -o ]]; then
@@ -110,7 +114,7 @@ yanker() {
 
   local clip
   if ! _yanker_clipboard_command; then
-    print -ru2 -- 'yanker: クリップボードへ書くコマンドが見つかりません。YANKER_CLIPBOARD を設定してください'
+    print -ru2 -- 'yanker: no clipboard command found; set YANKER_CLIPBOARD'
     return 127
   fi
   clip=$REPLY
@@ -119,20 +123,24 @@ yanker() {
   _yanker_build_cmdline "$@"
   cmdline=$REPLY
 
-  # 画面へ出す先として yanker 自身の標準出力を複製しておく。/dev/tty を直に開くと
-  # 端末が無い場面（スクリプト、CI、cron）で失敗するうえ、リダイレクト先を無視してしまう
+  # Duplicate yanker's own stdout as the destination for the visible copy.
+  # Opening /dev/tty directly fails where there is no terminal (scripts, CI,
+  # cron) and ignores wherever the caller redirected stdout to.
   local visible
   exec {visible}>&1
 
-  # 2>&1 は { } の外に置いて標準エラー出力もパイプへ入れる。`ls: no such file` の
-  # ような失敗の理由や「該当なし」の知らせは標準エラー出力へ出るコマンドが多く、
-  # 付けないと画面に出るだけでコピーから漏れる。共有したいのはその1行のことが多い。
+  # 2>&1 sits outside the { } so stderr joins the pipeline too. Failure reasons
+  # and "nothing matched" notices go to stderr for most commands; without this
+  # they appear on screen but never reach the clipboard, and they are usually
+  # the one line worth sharing.
   #
-  # クリップボードはパイプの最終段に置く。プロセス置換 >(...) にするとシェルが
-  # 完了を待たないため、書き終わる前に yanker が戻って中身が欠けることがある。
+  # The clipboard is the final pipeline stage on purpose. As a process
+  # substitution >(...) the shell would not wait for it, and yanker could return
+  # before the text was fully written.
   #
-  # pipestatus[1] は { } の終了ステータス、すなわち最後に置いた eval の結果を指す。
-  # if で囲むと pipestatus が1要素に潰れてクリップボード側しか残らないので、分岐は中に置く
+  # pipestatus[1] is the exit status of the { } block, i.e. of the eval inside.
+  # Wrapping this in an `if` collapses pipestatus to a single element and leaves
+  # only the clipboard's status, so the branch lives inside the block instead.
   {
     (( only_output )) || print -r -- "\$ $cmdline"
     eval "$cmdline"
@@ -144,38 +152,42 @@ yanker() {
 }
 
 # ---------------------------------------------------------------------------
-# ZLE 連携
+# ZLE integration
 # ---------------------------------------------------------------------------
 
-# Enter を押した行を見て、素のパイプが続く yanker の行だけを括り直し、REPLY に入れる。
-# 判定と書き換えを ZLE から切り離してあるので、ウィジェット抜きで試せる
+# Inspect the line the user pressed Enter on and, when it is a yanker line
+# followed by an unquoted pipe, re-quote it into REPLY. Keeping the decision and
+# the rewrite outside the widget makes both testable without ZLE.
 _yanker_rewrite_line() {
   emulate -L zsh -o extended_glob
   local line=$1
   REPLY=$line
 
-  # (z) はシェルと同じ規則で行を語に割る。引用符の中のパイプは割れずに1語へ収まるため、
-  # 素のパイプだけを見分けられる。すでに引用済みの行を二重に括らずに済む
+  # (z) splits the line into words using the shell's own rules. A pipe inside
+  # quotes stays within a single word, so only unquoted pipes are visible here,
+  # and an already-quoted line does not get wrapped a second time.
   local -a words=(${(z)line})
   (( $#words )) || return
 
-  # `(yanker|y)` のように必ず1グループにする。下の後方参照の番号がこの形に依存している。
-  # REPLY には呼び出し元へ返す行が入っているので、ここで別の値を置かない
+  # Always exactly one group, as in `(yanker|y)`; the backreference numbering
+  # below depends on that shape. REPLY already holds the line to return to the
+  # caller, so nothing else may be stored in it here.
   local pattern="(${(j:|:)_yanker_names})"
   [[ ${words[1]} == ${~pattern} ]] || return
 
   local word
   for word in "${words[@]}"; do
     _yanker_is_operator "$word" || continue
-    # コマンド名と -o は外に残し、それ以降を丸ごと1つの引数にまとめる
+    # Leave the command name and -o outside; fold everything after them into a
+    # single argument.
     [[ $line == (#b)([[:blank:]]#${~pattern}[[:blank:]]##(-o[[:blank:]]##)#)(*) ]] &&
       REPLY="${match[1]}${(qq)match[4]}"
     return
   done
 }
 
-# 退避した既存 accept-line の呼び名。他プラグインが未導入なら組み込みを指す。
-# プラグインマネージャに二重に読み込まれても退避先を忘れないよう、既存値を残す
+# Name of the saved accept-line widget; the builtin when no other plugin has one.
+# Keep any existing value so a second source does not forget where to delegate.
 typeset -g _yanker_parent_widget
 : ${_yanker_parent_widget:='.accept-line'}
 
@@ -185,11 +197,12 @@ _yanker_accept_line() {
   zle "$_yanker_parent_widget"
 }
 
-# accept-line に割り込む。zsh-syntax-highlighting など同じウィジェットを取る
-# プラグインと共存させるため、既存の定義を別名で退避してから呼び継ぐ。
-# zle -A で付けた別名は、その後 accept-line を差し替えても元の実装を指し続ける
+# Hook accept-line. To coexist with plugins that claim the same widget, such as
+# zsh-syntax-highlighting, save the existing definition under another name and
+# delegate to it. An alias made with `zle -A` keeps pointing at the original
+# implementation even after accept-line itself is replaced.
 _yanker_install_widget() {
-  # プラグインマネージャが二重に source しても、二重に挟まない
+  # Do not wrap twice when a plugin manager sources this file more than once.
   [[ ${widgets[accept-line]} == 'user:_yanker_accept_line' ]] && return 0
 
   if [[ ${widgets[accept-line]} == user:* ]]; then
@@ -203,12 +216,12 @@ _yanker_install_widget() {
 }
 
 # ---------------------------------------------------------------------------
-# 読み込み時の設定
+# Setup on load
 # ---------------------------------------------------------------------------
 
-# 短縮名。すでに他人が使っている名前は奪わない。
-# 二重に読み込まれると _yanker_names は (yanker) に戻るので、
-# 前回自分が張った別名も名簿へ入れ直す。落とすと ZLE の行書き換えが効かなくなる
+# Short alias, never stealing a name someone else already uses.
+# A second source resets _yanker_names to (yanker), so an alias installed by an
+# earlier load has to be re-registered; dropping it would break the ZLE rewrite.
 : ${YANKER_ALIAS=y}
 if [[ -n $YANKER_ALIAS ]]; then
   if [[ ${aliases[$YANKER_ALIAS]-} == 'yanker' ]]; then
@@ -219,7 +232,8 @@ if [[ -n $YANKER_ALIAS ]]; then
   fi
 fi
 
-# zle モジュールが無い環境（非対話シェル）では連携を諦め、関数だけ使えるようにする
+# Where the zle module is absent (a non-interactive shell) skip the integration
+# and leave yanker usable as a plain function.
 if (( ${YANKER_BIND_ACCEPT_LINE:-1} )) && zmodload -e zsh/zle; then
   _yanker_install_widget
 fi

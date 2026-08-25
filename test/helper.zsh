@@ -1,10 +1,9 @@
-# テストの共通処理。各 test_*.zsh はこれを source 済みの環境で読み込まれる
+# Shared test scaffolding. Every test_*.zsh is sourced with this already loaded.
 
 typeset -g YANKER_TEST_RUN=0
 typeset -g YANKER_TEST_FAILED=0
-typeset -g YANKER_TEST_CURRENT=''
 
-# リポジトリのルート
+# Repository root
 typeset -g YANKER_ROOT=${0:A:h:h}
 
 assert_equal() {
@@ -24,14 +23,4 @@ assert_equal() {
 assert_status() {
   local desc=$1 expected=$2 actual=$3
   assert_equal "$desc" "$expected" "$actual"
-}
-
-# 子 zsh でプラグインを読み込み、渡したコードを走らせて出力を返す。
-# 読み込み時の副作用（alias 作成、ウィジェット登録）ごと検証したいので毎回別プロセスにする
-run_in_zsh() {
-  local code=$1
-  zsh -f -c "
-    source ${(q)YANKER_ROOT}/yanker.plugin.zsh
-    $code
-  " 2>&1
 }

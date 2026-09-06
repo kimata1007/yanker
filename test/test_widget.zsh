@@ -40,3 +40,32 @@ typeset trace=$(zsh -f -c "
 " 2>&1)
 assert_equal 'rewrites BUFFER before calling the parent widget' \
   $'zle:.accept-line\nBUFFER=yanker \'ls | grep foo\'' "$trace"
+
+# --- the fzf picker key ----------------------------------------------------
+# Same trick: load zle explicitly so bindkey is inspectable without a terminal.
+
+key_probe() {
+  zsh -f -c "
+    zmodload zsh/zle
+    $1
+    print -r -- \"\${\${(z)\"\$(bindkey -- ${2:-'^V'})\"}[2]}\"
+  " 2>&1
+}
+
+assert_equal 'claims ^V while it still holds a builtin widget' \
+  'yanker-pick' "$(key_probe "$load")"
+
+assert_equal 'leaves ^V alone when someone else bound it' \
+  'mine' "$(key_probe "mine() { : }; zle -N mine; bindkey -- '^V' mine; $load")"
+
+assert_equal 'a second load keeps the picker bound' \
+  'yanker-pick' "$(key_probe "$load; $load")"
+
+assert_equal "YANKER_PICK_KEY='' leaves ^V untouched" \
+  'quoted-insert' "$(key_probe "YANKER_PICK_KEY=''; $load")"
+
+assert_equal 'YANKER_PICK_KEY chooses a different key' \
+  'yanker-pick' "$(key_probe "YANKER_PICK_KEY='^X^Y'; $load" "'^X^Y'")"
+
+assert_equal 'and then leaves ^V for zsh' \
+  'quoted-insert' "$(key_probe "YANKER_PICK_KEY='^X^Y'; $load")"

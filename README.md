@@ -161,6 +161,9 @@ $ grep '^: ' ~/.yanker_history | tail -3
 A payload is arbitrary bytes, NUL included, so it is stored base64-encoded on
 the lines that follow its header. `y -p N` hands it back byte for byte.
 
+Copies made at the same time — `y one & y two &` — serialise on
+`~/.yanker_history.lock`, so a header never ends up separated from its payload.
+
 > **Copies can contain secrets.** Command output holds tokens, keys, and auth
 > headers as readily as it holds a diff, and this file keeps them on disk until
 > twenty more copies push them out. `y -c` clears it, `YANKER_HISTORY=0` turns

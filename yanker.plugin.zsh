@@ -150,9 +150,13 @@ yanker() {
   # A history that cannot be written is never worth failing a copy over — the
   # clipboard is the point of the command — so an unusable spool just disables
   # the history for this call.
+  # $$ stays the same inside a subshell, so two copies started from one shell
+  # — `yanker a & yanker b &` — would share a spool and scribble over each
+  # other. sysparams[pid] is the running process, and $RANDOM covers a pid
+  # reused after a killed run left its spool behind.
   local spool=''
   if _yanker_histfile && _yanker_history_touch "$REPLY" && _yanker_spool_dir; then
-    spool=$REPLY/spool.$$
+    spool=$REPLY/spool.${sysparams[pid]:-$$}.$RANDOM
   fi
 
   # Duplicate yanker's own stdout as the destination for the visible copy.
@@ -404,11 +408,14 @@ _yanker_history_clear() {
   _yanker_histfile || return 0
   file=$REPLY
   [[ -e $file ]] || return 0
+  _yanker_history_lock "$file"
   : >| "$file" 2>/dev/null || {
+    _yanker_history_unlock
     print -ru2 -- "yanker: cannot clear $file"
     return 1
   }
   typeset -g _yanker_hist_count=0
+  _yanker_history_unlock
   return 0
 }
 
@@ -439,6 +446,36 @@ _yanker_history_select() {
   _yanker_history_recopy "${pick%%$'\t'*}"
 }
 
+# Take the append lock, and put the descriptor in _yanker_lockfd.
+#
+# The lock is taken on `<history>.lock`, a path pruning never replaces. Locking
+# the history file itself stops meaning anything the moment a rewrite renames a
+# new file over it: a writer that waited on the old inode and one that opens the
+# new path would both believe they hold the lock, and their records interleave.
+#
+# The wait is deliberately unbounded. `zsystem flock -t` retries with LOCK_NB on
+# a shared schedule, so contending shells wake together and the same ones keep
+# losing: on zsh 5.9, sixteen copies at once leave five of them unlocked, and
+# their header and payload writes then interleave. Blocking takes all sixteen.
+# Nothing here can deadlock — the section is one base64 and at most one rewrite,
+# and the kernel drops the lock if the holder dies.
+#
+# Failing to lock is still not fatal. Serialising copies matters less than
+# making one, so a shell without zsh/system carries on unserialised.
+_yanker_history_lock() {
+  local lock=$1.lock
+  typeset -g _yanker_lockfd=''
+  [[ -e $lock ]] || ( umask 077; : >| "$lock" ) 2>/dev/null
+  zsystem flock -f _yanker_lockfd "$lock" 2>/dev/null
+  return 0
+}
+
+_yanker_history_unlock() {
+  [[ -n ${_yanker_lockfd-} ]] && zsystem flock -u $_yanker_lockfd 2>/dev/null
+  typeset -g _yanker_lockfd=''
+  return 0
+}
+
 # Append one record. $1 is the command line, $2 a file holding the raw payload.
 # Locking matters: the header and the payload are two writes, and a second shell
 # appending between them would interleave into an unreadable record.
@@ -463,8 +500,16 @@ _yanker_history_append() {
   local flags=''
   (( cap > 0 && bytes > cap )) && flags='big'
 
-  local lockfd=''
-  zsystem flock -t 10 -f lockfd "$file" 2>/dev/null
+  _yanker_history_lock "$file"
+
+  # Deriving the count has to happen before the first increment: `(( x++ ))`
+  # creates the variable, so an unset check afterwards never fires and a shell
+  # that opened an existing history would count from zero — and a shell that
+  # makes only a few copies would then never trim the file at all.
+  if [[ -z ${_yanker_hist_count-} ]]; then
+    typeset -g _yanker_hist_count=$(command grep -c '^: ' "$file" 2>/dev/null)
+    [[ $_yanker_hist_count == <-> ]] || typeset -g _yanker_hist_count=0
+  fi
 
   {
     printf ': %d:%d:%s;%s\n' "${EPOCHSECONDS:-0}" "$bytes" "$flags" "$label"
@@ -474,7 +519,7 @@ _yanker_history_append() {
 
   (( _yanker_hist_count++ ))
   _yanker_history_prune "$file"
-  [[ -n $lockfd ]] && zsystem flock -u $lockfd 2>/dev/null
+  _yanker_history_unlock
   return $ret
 }
 
@@ -491,12 +536,13 @@ _yanker_history_prune() {
   _yanker_history_limit
   local -i limit=$REPLY
   (( limit > 0 )) || return 0
-  local -i slack=$(( limit < 20 ? 10 : limit / 2 ))
+  # Overshoot by at most ten records, whatever the limit. That still buys one
+  # rewrite per ten copies, and a small YANKER_HISTSIZE never holds many times
+  # what it promised — which matters, because these are copies of real output.
+  local -i slack=$(( limit < 10 ? limit : 10 ))
 
-  if [[ -z ${_yanker_hist_count-} ]] || (( _yanker_hist_count < 0 )); then
-    typeset -g _yanker_hist_count=$(command grep -c '^: ' "$file" 2>/dev/null)
-  fi
-  (( _yanker_hist_count > limit + slack )) || return 0
+  # The caller seeds the count from the file before its first increment.
+  (( ${_yanker_hist_count:-0} > limit + slack )) || return 0
 
   local -i total=$(command grep -c '^: ' "$file" 2>/dev/null)
   typeset -g _yanker_hist_count=$total

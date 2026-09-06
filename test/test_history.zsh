@@ -189,6 +189,87 @@ grep "\$ $PICK\$"' > $fakebin/fzf
     'yanker: -s needs fzf; use `yanker -l` then `yanker -g N`
 127' "$msg"
 
+  # --- a shell must count what is already in the file ----------------------
+  # `(( x++ ))` creates the variable, so seeding the count after the first
+  # increment never happens. A shell that made only a few copies would then
+  # never trim, and the file would grow across sessions without bound.
+
+  yanker -c
+  unset _yanker_hist_count
+  typeset -g YANKER_HISTSIZE=5
+  typeset -i n
+  for (( n = 0; n < 20; n++ )); do yanker "echo seed$n" >/dev/null; done
+
+  # Five separate shells, each doing too few copies to reach the limit on its
+  # own. Without the seeding this leaves 24 records behind.
+  for (( n = 0; n < 5; n++ )); do
+    zsh -f -c "
+      source ${(q)YANKER_ROOT}/yanker.plugin.zsh
+      export YANKER_HISTFILE=${(q)YANKER_HISTFILE}
+      export YANKER_CLIPBOARD=cat
+      export YANKER_HISTSIZE=5
+      for i in 1 2 3; do yanker \"echo fresh\$i\" >/dev/null; done
+    " >/dev/null 2>&1
+  done
+  assert_equal 'a fresh shell counts the records already in the file' '1' \
+    "$(( $(command grep -c '^: ' $YANKER_HISTFILE) <= 5 + 5 ))"
+  unset YANKER_HISTSIZE
+  unset _yanker_hist_count
+
+  # --- copies running at the same time ------------------------------------
+  # Subshells share $$, so a spool named after it would be shared too, and the
+  # pruner renames the history file out from under any lock taken on it. Both
+  # show up here as records that interleave or go missing.
+
+  yanker -c
+  unset _yanker_hist_count
+  zsh -f -c "
+    source ${(q)YANKER_ROOT}/yanker.plugin.zsh
+    export YANKER_HISTFILE=${(q)YANKER_HISTFILE}
+    export YANKER_CLIPBOARD=cat
+    for i in {1..12}; do yanker \"echo concurrent\$i\" >/dev/null & done
+    wait
+  " >/dev/null 2>&1
+  assert_equal 'concurrent copies each leave one record' '12' \
+    "$(command grep -c '^: ' $YANKER_HISTFILE)"
+
+  # Each record's header must still describe its own payload.
+  check_records() {
+    typeset -i bad=0 idx=0 total=$1
+    typeset -a payload
+    for (( idx = 1; idx <= total; idx++ )); do
+      payload=(${(f)"$(yanker -p $idx 2>/dev/null)"})
+      [[ $#payload == 2 && ${payload[1]} == "\$ echo ${payload[2]}" ]] || (( bad++ ))
+    done
+    print -r -- $bad
+  }
+  assert_equal 'and none of them interleaved' '0' "$(check_records 12)"
+  unset _yanker_hist_count
+
+  # Again with a limit small enough that trimming runs *during* the burst. That
+  # is what exercises the rename: the pruner replaces the history file, so a
+  # lock taken on the file itself would stop holding anyone back.
+  yanker -c
+  unset _yanker_hist_count
+  typeset -g YANKER_HISTSIZE=4
+  zsh -f -c "
+    source ${(q)YANKER_ROOT}/yanker.plugin.zsh
+    export YANKER_HISTFILE=${(q)YANKER_HISTFILE}
+    export YANKER_CLIPBOARD=cat
+    export YANKER_HISTSIZE=4
+    for i in {1..16}; do yanker \"echo racing\$i\" >/dev/null & done
+    wait
+  " >/dev/null 2>&1
+
+  assert_equal 'trimming under concurrency stays within the limit and slack' '1' \
+    "$(( $(command grep -c '^: ' $YANKER_HISTFILE) <= 4 + 4 ))"
+  _yanker_history_headers
+  assert_equal 'and every surviving record still reads back whole' '0' \
+    "$(check_records $#reply)"
+  unset YANKER_HISTSIZE
+  unset _yanker_hist_count
+  unfunction check_records
+
   # --- the file stays greppable for command lines, like .zsh_history --------
 
   yanker 'git status -sb' >/dev/null
